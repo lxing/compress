@@ -1,69 +1,63 @@
-# buf: the lookahead buffer
-# dic: the dictionary buffer
-# limits: min/max match lengths, uncoded bits to copy each time
-# bufsize: size of dic/buf
-
-# coded/uncoded flag takes 1 bits to encode
-# buffer position takes log(4096) = 12 bits to encode
-# match length takes 3 bits to encode (range of 8)
-# uncoded bits copy 15 at a time
-# net uncoded/coded bits required: 16/16
-# min/max match length: 17-24 (anything less should be uncoded for efficiency)
-
 import sys, bitstream
 
 # returns number of bits written from buffer
-def encode(pos, length, dic, buf, limits):
-  if length < limits[0]: # unencoded
-    bits = [47]
-    bits.extend(buf[0:limits[2]])
-  else: # encoded
-    bits = [49]
-    bits.extend(dic[pos:min(length, limits[1])])
+def encode(pos, length, dic, buf, consts):
+  if length < consts['min']: # not worth encoding, just dump the buffer
+    bits = [consts['uncoded']]
+    length = consts['max']
+    bits.extend(buf[:consts['max']])
+  else: # encode the buffer as a match
+    bits = [consts['coded']]
+    length = min(length, consts['max'])
+    bits.extend(dic[pos:length])
   bitstream.write(bits)
-  return len(bits) - 1
+  return length
 
 #return (position, length) in dic of max matching substring between dic and buf
 def match_buffers(dic, buf):
   bestpos = bestlength = 0  
   return (bestpos, bestlength)
 
-def compress(dic, bufsize, limits):
+def compress(dic, consts):
   bitstream.start(sys.argv[2], sys.argv[3])
-  buf = bitstream.read(bufsize)
-  while len(buf) > 0:
+  buf = bitstream.read(consts['max'])
+  while buf != []:
     # find matches and encode
     match = match_buffers(dic, buf)
-    length = encode(match[0], match[1], dic, buf, limits)
+    length = encode(match[0], match[1], dic, buf, consts)
     # slide the window
-    dic = dic[length:]
-    dic.extend(buf[0:length])
-    buf = buf[length:]
+    del dic[:length]
+    dic.extend(buf[:length])
+    del buf[:length]
     buf.extend(bitstream.read(length))
 
-def decompress(dic, limits):
+def decompress(dic, consts):
   bitstream.start(sys.argv[2], sys.argv[3])
-  buf = []
-  length = 1
-  while length > 0:
+  buf = ['filler']
+  while buf != []:
     flag = bitstream.read(1)
-    if flag == [47]:
-      buf = bitstream.read(limits[2])
-    else:
+    if flag == [47]: #unencoded
+      buf = bitstream.read(consts['max'])
+    else: # encoded
       break
-    length = len(buf)
-    dic = dic[length:]
+    # slide the window
+    del dic[:len(buf)]
     dic.extend(buf)
     bitstream.write(buf)
 
-bufsize = 4096
-limits = (17, 24, 15)
+consts = {'min':16, # minimum match size; any less is not worth encoding
+          'max':23, # maximum match size
+          'dic':4096, # dictionary size
+          'posbits':12, # number of bits to encode position
+          'lenbits':3, # of bits to encode range
+          'uncoded':47, # uncoded flag
+          'coded':46,} # encoded flag
 bitstream.start('dictionary', None)
-dic = bitstream.read(bufsize)
+dic = bitstream.read(consts['dic'])
 
 if sys.argv[1] == '-c':
-  compress(dic, bufsize, limits)
+  compress(dic, consts)
 elif sys.argv[1] == '-d':
-  decompress(dic, limits)
+  decompress(dic, consts)
 else:
   print('Usage: {0} -(c/d) <infile> <outfile>'.format(sys.argv[0]))
